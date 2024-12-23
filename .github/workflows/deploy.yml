@@ -15,9 +15,17 @@ jobs:
     steps:
     - name: Checkout repository
       uses: actions/checkout@v3
+      with:
+        fetch-depth: 0
+
+    - name: List repository contents
+      run: |
+        echo "Repository contents:"
+        ls -la
 
     - name: Generate files.json
       run: |
+        echo "Generating files.json..."
         echo "[" > files.json
         find . -type f \( \
           -iname "*.mp4" -o \
@@ -36,16 +44,23 @@ jobs:
           -iname "*.mkv" \
         \) -not -path "*/.git/*" -not -path "*/node_modules/*" -not -path "*/.github/*" | while read -r file; do
           clean_path="${file#./}"
+          echo "Found file: $clean_path"
           echo "  {\"url\": \"$clean_path\"}," >> files.json
         done
         sed -i '$ s/,$//' files.json
         echo "]" >> files.json
+        echo "files.json contents:"
+        cat files.json
 
-    - name: Setup deployment directory
+    - name: Prepare deployment
       run: |
-        mkdir deploy
+        echo "Creating deployment directory..."
+        mkdir -p deploy
+        echo "Copying files..."
         cp -r * deploy/ 2>/dev/null || true
         cp files.json deploy/
+        echo "Deployment directory contents:"
+        ls -la deploy/
 
     - name: Deploy to GitHub Pages
       uses: peaceiris/actions-gh-pages@v3
