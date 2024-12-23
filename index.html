@@ -164,7 +164,6 @@
 </head>
 <body>
     <div id="loading" class="loading">Loading...</div>
-    <div id="debug" style="color: white; padding: 20px;"></div>
     <div class="gallery" id="gallery"></div>
     <div class="modal" id="modal">
         <div class="modal-content">
@@ -176,11 +175,6 @@
     <script>
         const GITHUB_PAGES_URL = 'https://xekoyt.github.io/Memebase';
         let currentMediaUrl = '';
-        const debugDiv = document.getElementById('debug');
-
-        function addDebug(message) {
-            debugDiv.innerHTML += message + '<br>';
-        }
 
         function getMediaType(url) {
             const ext = url.split('.').pop().toLowerCase();
@@ -315,31 +309,20 @@
             }
         }
 
-        // Load media files from files.json
-         addDebug('Starting to load files.json...');
         fetch('files.json')
-            .then(response => {
-                addDebug('Got response from files.json');
-                return response.json();
-            })
+            .then(response => response.json())
             .then(mediaFiles => {
-                addDebug(`Loaded ${mediaFiles.length} files from files.json`);
-                addDebug('Files: ' + JSON.stringify(mediaFiles, null, 2));
-                
                 const gallery = document.getElementById('gallery');
                 mediaFiles.forEach(mediaInfo => {
-                    addDebug(`Processing file: ${mediaInfo.url}`);
                     gallery.appendChild(createMediaElement(mediaInfo));
                 });
                 document.getElementById('loading').style.display = 'none';
             })
             .catch(error => {
-                addDebug('Error loading files.json: ' + error);
                 console.error('Error loading files.json:', error);
                 document.getElementById('loading').textContent = 'Error loading media files';
             });
 
-        // Close modal when clicking outside
         document.getElementById('modal').addEventListener('click', (e) => {
             if (e.target === document.getElementById('modal')) {
                 closeModal();
