@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memebasey</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: Arial, sans-serif;
+            background: #1a1a1a;
+            color: #fff;
+            min-height: 100vh;
+        }
+
+        .gallery {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 20px;
+            padding: 20px;
+        }
+
+        .media-item {
+            position: relative;
+            aspect-ratio: 16/9;
+            background: #2a2a2a;
+            border-radius: 8px;
+            overflow: hidden;
+            cursor: pointer;
+            transition: transform 0.3s ease;
+        }
+
+        .media-item:hover {
+            transform: scale(1.02);
+        }
+
+        .media-item img,
+        .media-item video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        .media-name {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            padding: 8px;
+            background: rgba(0, 0, 0, 0.7);
+            font-size: 14px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .play-icon {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 50px;
+            height: 50px;
+            background: rgba(255, 255, 255, 0.8);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+
+        .media-item:hover .play-icon {
+            opacity: 1;
+        }
+
+        .modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.9);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+
+        .modal.active {
+            display: flex;
+            animation: fadeIn 0.3s ease;
+        }
+
+        .modal-content {
+            max-width: 90%;
+            max-height: 90vh;
+            position: relative;
+        }
+
+        .modal-content img,
+        .modal-content video {
+            max-width: 100%;
+            max-height: 90vh;
+            border-radius: 8px;
+        }
+
+        .close-btn {
+            position: absolute;
+            top: -40px;
+            right: 0;
+            background: #fff;
+            border: none;
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: transform 0.3s ease;
+        }
+
+        .close-btn:hover {
+            transform: rotate(90deg);
+        }
+
+        .copy-btn {
+            position: absolute;
+            bottom: -40px;
+            right: 0;
+            background: #fff;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 20px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: background 0.3s ease;
+        }
+
+        .copy-btn:hover {
+            background: #ddd;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        .loading {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 24px;
+            color: #fff;
+        }
+    </style>
+</head>
+<body>
+    <div id="loading" class="loading">Loading...</div>
+    <div class="gallery" id="gallery"></div>
+    <div class="modal" id="modal">
+        <div class="modal-content">
+            <button class="close-btn" onclick="closeModal()">×</button>
+            <button class="copy-btn" onclick="copyCurrentLink()">Copy Link</button>
+        </div>
+    </div>
+
+    <script>
+        const GITHUB_PAGES_URL = 'https://xekoyt.github.io/Memebase';
+        let currentMediaUrl = '';
+
+        function getMediaType(url) {
+            const ext = url.split('.').pop().toLowerCase();
+            const videoExts = ['mp4', 'webm', 'mov', 'avi', 'mkv', 'mpg'];
+            const imageExts = ['jpg', 'jpeg', 'png', 'gif'];
+            const audioExts = ['mp3', 'ogg', 'wav', 'flac'];
+
+            if (videoExts.includes(ext)) return 'video';
+            if (imageExts.includes(ext)) return 'image';
+            if (audioExts.includes(ext)) return 'audio';
+            return 'unknown';
+        }
+
+        function createMediaElement(mediaInfo) {
+            const container = document.createElement('div');
+            container.className = 'media-item';
+
+            const fileName = mediaInfo.url.split('/').pop();
+            const mediaType = getMediaType(fileName);
+            const fullUrl = mediaInfo.url.startsWith('http') ? mediaInfo.url : GITHUB_PAGES_URL + '/' + mediaInfo.url;
+
+            switch (mediaType) {
+                case 'image':
+                    const img = document.createElement('img');
+                    img.src = fullUrl;
+                    img.alt = fileName;
+                    container.appendChild(img);
+                    break;
+
+                case 'video':
+                    const video = document.createElement('video');
+                    video.src = fullUrl;
+                    video.preload = 'metadata';
+                    container.appendChild(video);
+                    
+                    const playIcon = document.createElement('div');
+                    playIcon.className = 'play-icon';
+                    playIcon.innerHTML = '▶';
+                    container.appendChild(playIcon);
+                    break;
+
+                case 'audio':
+                    const audioImg = document.createElement('img');
+                    audioImg.src = 'data:image/svg+xml,' + encodeURIComponent(`
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="white">
+                            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 14.5c-2.49 0-4.5-2.01-4.5-4.5S9.51 7.5 12 7.5s4.5 2.01 4.5 4.5-2.01 4.5-4.5 4.5z"/>
+                        </svg>
+                    `);
+                    container.appendChild(audioImg);
+                    break;
+            }
+
+            const nameLabel = document.createElement('div');
+            nameLabel.className = 'media-name';
+            nameLabel.textContent = fileName;
+            container.appendChild(nameLabel);
+
+            container.addEventListener('click', () => openModal(mediaInfo));
+            container.addEventListener('contextmenu', (e) => {
+                e.preventDefault();
+                if (mediaType === 'video') {
+                    const video = container.querySelector('video');
+                    if (video.paused) {
+                        video.play();
+                    } else {
+                        video.pause();
+                    }
+                }
+            });
+
+            return container;
+        }
+
+        function openModal(mediaInfo) {
+            const modal = document.getElementById('modal');
+            const modalContent = modal.querySelector('.modal-content');
+            const fileName = mediaInfo.url.split('/').pop();
+            const mediaType = getMediaType(fileName);
+            currentMediaUrl = mediaInfo.url.startsWith('http') ? mediaInfo.url : GITHUB_PAGES_URL + '/' + mediaInfo.url;
+
+            modalContent.innerHTML = `
+                <button class="close-btn" onclick="closeModal()">×</button>
+                <button class="copy-btn" onclick="copyCurrentLink()">Copy Link</button>
+            `;
+
+            switch (mediaType) {
+                case 'image':
+                    const img = document.createElement('img');
+                    img.src = currentMediaUrl;
+                    modalContent.insertBefore(img, modalContent.firstChild);
+                    break;
+
+                case 'video':
+                    const video = document.createElement('video');
+                    video.src = currentMediaUrl;
+                    video.controls = true;
+                    video.autoplay = true;
+                    modalContent.insertBefore(video, modalContent.firstChild);
+                    break;
+
+                case 'audio':
+                    const audio = document.createElement('audio');
+                    audio.src = currentMediaUrl;
+                    audio.controls = true;
+                    audio.autoplay = true;
+                    modalContent.insertBefore(audio, modalContent.firstChild);
+                    break;
+            }
+
+            modal.classList.add('active');
+        }
+
+        function closeModal() {
+            const modal = document.getElementById('modal');
+            modal.classList.remove('active');
+            const mediaElement = modal.querySelector('video, audio');
+            if (mediaElement) {
+                mediaElement.pause();
+            }
+        }
+
+        async function copyCurrentLink() {
+            try {
+                await navigator.clipboard.writeText(currentMediaUrl);
+                const copyBtn = document.querySelector('.copy-btn');
+                copyBtn.textContent = 'Copied!';
+                setTimeout(() => {
+                    copyBtn.textContent = 'Copy Link';
+                }, 2000);
+            } catch (err) {
+                console.error('Failed to copy:', err);
+            }
+        }
+
+        // Load media files from files.json
+        fetch('files.json')
+            .then(response => response.json())
+            .then(mediaFiles => {
+                const gallery = document.getElementById('gallery');
+                mediaFiles.forEach(mediaInfo => {
+                    gallery.appendChild(createMediaElement(mediaInfo));
+                });
+                document.getElementById('loading').style.display = 'none';
+            })
+            .catch(error => {
+                console.error('Error loading files.json:', error);
+                document.getElementById('loading').textContent = 'Error loading media files';
+            });
+
+        // Close modal when clicking outside
+        document.getElementById('modal').addEventListener('click', (e) => {
+            if (e.target === document.getElementById('modal')) {
+                closeModal();
+            }
+        });
+    </script>
+</body>
+</html>
