@@ -16,16 +16,14 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v3
       with:
-        fetch-depth: 0
-
-    - name: List repository contents
-      run: |
-        echo "Repository contents:"
-        ls -la
+        fetch-depth: 0  # Get full history for proper processing
 
     - name: Generate files.json
       run: |
-        echo "Generating files.json..."
+        # Clean up any existing files.json
+        rm -f files.json
+        
+        # Generate fresh files.json
         echo "[" > files.json
         find . -type f \( \
           -iname "*.mp4" -o \
@@ -43,31 +41,32 @@ jobs:
           -iname "*.mpg" -o \
           -iname "*.mkv" \
         \) -not -path "*/.git/*" -not -path "*/node_modules/*" -not -path "*/.github/*" | while read -r file; do
+          # Remove ./ from the beginning of the path
           clean_path="${file#./}"
-          echo "Found file: $clean_path"
-          echo "  {\"url\": \"$clean_path\"}," >> files.json
+          # Add timestamp to prevent caching
+          timestamp=$(date -u +%s)
+          echo "  {\"url\": \"$clean_path\", \"timestamp\": $timestamp}," >> files.json
         done
         sed -i '$ s/,$//' files.json
         echo "]" >> files.json
-        echo "files.json contents:"
-        cat files.json
 
-    - name: Prepare deployment
+    - name: Clear deployment directory
       run: |
-        echo "Creating deployment directory..."
-        mkdir -p deploy
-        echo "Copying files..."
+        rm -rf deploy
+        mkdir deploy
+
+    - name: Copy files to deployment directory
+      run: |
         cp -r * deploy/ 2>/dev/null || true
         cp files.json deploy/
-        echo "Deployment directory contents:"
-        ls -la deploy/
-
+        
     - name: Deploy to GitHub Pages
       uses: peaceiris/actions-gh-pages@v3
       with:
         github_token: ${{ secrets.GITHUB_TOKEN }}
         publish_dir: ./deploy
-        force_orphan: true
+        force_orphan: true  # Ensure clean deployment
+        enable_jekyll: false  # Disable Jekyll processing
 
     - name: Update files.json in main branch
       run: |
