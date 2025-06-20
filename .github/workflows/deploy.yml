@@ -314,7 +314,7 @@ jobs:
           done
 
       - name: 💾 Cache Processed Files
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: |
             files.json
@@ -324,7 +324,7 @@ jobs:
             media-cache-${{ env.CACHE_VERSION }}-
 
       - name: 📤 Upload Processing Artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: processed-media
           path: |
@@ -351,7 +351,7 @@ jobs:
           cache: 'npm'
 
       - name: 📤 Download Processed Media
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: processed-media
           path: .
@@ -421,7 +421,7 @@ jobs:
           echo "🎉 All tests passed!"
 
       - name: 📤 Upload Build Artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: build-artifacts
           path: |
@@ -461,7 +461,7 @@ jobs:
           fetch-depth: 0
 
       - name: 📤 Download Build Artifacts
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: build-artifacts
           path: .
@@ -541,7 +541,7 @@ jobs:
           echo "  💾 Size: $(du -sh deploy | cut -f1)"
 
       - name: 🔐 Setup GitHub Pages
-        uses: actions/configure-pages@v3
+        uses: actions/configure-pages@v4
 
       - name: 📤 Upload Pages Artifact
         uses: actions/upload-pages-artifact@v2
@@ -574,7 +574,7 @@ jobs:
           fetch-depth: 0
 
       - name: 📤 Download Build Artifacts
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: build-artifacts
           path: .
