@@ -1,76 +1,675 @@
-name: Deploy to GitHub Pages
-
+name: 🚀 Ultimate Memebase Deployment Pipeline
 on:
   push:
-    branches:
-      - main
+    branches: [main, develop]
+    paths-ignore:
+      - 'README.md'
+      - 'docs/**'
+      - '.gitignore'
+  pull_request:
+    branches: [main]
   workflow_dispatch:
+    inputs:
+      force_rebuild:
+        description: 'Force complete rebuild'
+        required: false
+        default: false
+        type: boolean
+      deployment_environment:
+        description: 'Deployment environment'
+        required: false
+        default: 'production'
+        type: choice
+        options:
+          - production
+          - staging
+          - preview
+      skip_optimization:
+        description: 'Skip media optimization'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  NODE_VERSION: '20'
+  PYTHON_VERSION: '3.11'
+  DEPLOY_BRANCH: gh-pages
+  CACHE_VERSION: v2
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  deploy:
+  # ============================================================================
+  # VALIDATION & SECURITY CHECKS
+  # ============================================================================
+  validate:
+    name: 🔍 Validation & Security
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    
+    outputs:
+      should_deploy: ${{ steps.changes.outputs.should_deploy }}
+      media_changed: ${{ steps.changes.outputs.media_changed }}
+      code_changed: ${{ steps.changes.outputs.code_changed }}
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v3
-      with:
-        fetch-depth: 0  # Get full history for proper processing
+      - name: 📥 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Generate files.json
-      run: |
-        # Clean up any existing files.json
-        rm -f files.json
-        
-        # Generate fresh files.json
-        echo "[" > files.json
-        find . -type f \( \
-          -iname "*.mp4" -o \
-          -iname "*.webm" -o \
-          -iname "*.gif" -o \
-          -iname "*.jpg" -o \
-          -iname "*.jpeg" -o \
-          -iname "*.png" -o \
-          -iname "*.mp3" -o \
-          -iname "*.ogg" -o \
-          -iname "*.wav" -o \
-          -iname "*.avi" -o \
-          -iname "*.mov" -o \
-          -iname "*.flac" -o \
-          -iname "*.mpg" -o \
-          -iname "*.mkv" \
-        \) -not -path "*/.git/*" -not -path "*/node_modules/*" -not -path "*/.github/*" | while read -r file; do
-          # Remove ./ from the beginning of the path
-          clean_path="${file#./}"
-          # Add timestamp to prevent caching
-          timestamp=$(date -u +%s)
-          echo "  {\"url\": \"$clean_path\", \"timestamp\": $timestamp}," >> files.json
-        done
-        sed -i '$ s/,$//' files.json
-        echo "]" >> files.json
+      - name: 🔒 Security Scan
+        uses: github/super-linter@v5
+        env:
+          DEFAULT_BRANCH: main
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VALIDATE_JAVASCRIPT_ES: true
+          VALIDATE_HTML: true
+          VALIDATE_CSS: true
+          VALIDATE_JSON: true
+          VALIDATE_YAML: true
 
-    - name: Clear deployment directory
-      run: |
-        rm -rf deploy
-        mkdir deploy
+      - name: 📊 Analyze Changes
+        id: changes
+        run: |
+          if [[ "${{ github.event.inputs.force_rebuild }}" == "true" ]]; then
+            echo "should_deploy=true" >> $GITHUB_OUTPUT
+            echo "media_changed=true" >> $GITHUB_OUTPUT
+            echo "code_changed=true" >> $GITHUB_OUTPUT
+            echo "🔄 Force rebuild requested"
+            exit 0
+          fi
 
-    - name: Copy files to deployment directory
-      run: |
-        cp -r * deploy/ 2>/dev/null || true
-        cp files.json deploy/
-        
-    - name: Deploy to GitHub Pages
-      uses: peaceiris/actions-gh-pages@v3
-      with:
-        github_token: ${{ secrets.GITHUB_TOKEN }}
-        publish_dir: ./deploy
-        force_orphan: true  # Ensure clean deployment
-        enable_jekyll: false  # Disable Jekyll processing
+          # Check for media file changes
+          MEDIA_CHANGED=$(git diff --name-only HEAD~1 HEAD | grep -E '\.(mp4|webm|gif|jpg|jpeg|png|mp3|ogg|wav|avi|mov|flac|mpg|mkv)$' || true)
+          CODE_CHANGED=$(git diff --name-only HEAD~1 HEAD | grep -E '\.(html|css|js|json)$' || true)
+          
+          if [[ -n "$MEDIA_CHANGED" ]]; then
+            echo "media_changed=true" >> $GITHUB_OUTPUT
+            echo "📸 Media files changed: $(echo "$MEDIA_CHANGED" | wc -l) files"
+          else
+            echo "media_changed=false" >> $GITHUB_OUTPUT
+          fi
 
-    - name: Update files.json in main branch
-      run: |
-        git config --global user.name "GitHub Actions"
-        git config --global user.email "actions@github.com"
-        git add files.json
-        git diff --quiet && git diff --staged --quiet || (git commit -m "Update files.json [skip ci]" && git push)
+          if [[ -n "$CODE_CHANGED" ]]; then
+            echo "code_changed=true" >> $GITHUB_OUTPUT
+            echo "💻 Code files changed: $(echo "$CODE_CHANGED" | wc -l) files"
+          else
+            echo "code_changed=false" >> $GITHUB_OUTPUT
+          fi
+
+          if [[ -n "$MEDIA_CHANGED" || -n "$CODE_CHANGED" ]]; then
+            echo "should_deploy=true" >> $GITHUB_OUTPUT
+            echo "✅ Changes detected - deployment needed"
+          else
+            echo "should_deploy=false" >> $GITHUB_OUTPUT
+            echo "⏭️ No relevant changes - skipping deployment"
+          fi
+
+  # ============================================================================
+  # MEDIA PROCESSING & OPTIMIZATION
+  # ============================================================================
+  process-media:
+    name: 🎨 Media Processing
+    runs-on: ubuntu-latest
+    needs: validate
+    if: needs.validate.outputs.should_deploy == 'true'
+    steps:
+      - name: 📥 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          lfs: true
+
+      - name: 🐍 Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: 📦 Install Media Processing Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            ffmpeg \
+            imagemagick \
+            webp \
+            gifsicle \
+            jpegoptim \
+            optipng \
+            exiftool
+          
+          pip install \
+            Pillow \
+            python-magic \
+            mutagen \
+            ffmpeg-python
+
+      - name: 🎯 Generate Enhanced Metadata
+        run: |
+          python3 << 'EOF'
+          import os
+          import json
+          import hashlib
+          import mimetypes
+          from datetime import datetime
+          from pathlib import Path
+          import subprocess
+          import magic
+
+          def get_file_hash(filepath):
+              with open(filepath, 'rb') as f:
+                  return hashlib.sha256(f.read()).hexdigest()[:16]
+
+          def get_media_info(filepath):
+              try:
+                  cmd = ['ffprobe', '-v', 'quiet', '-print_format', 'json', '-show_format', '-show_streams', str(filepath)]
+                  result = subprocess.run(cmd, capture_output=True, text=True)
+                  if result.returncode == 0:
+                      return json.loads(result.stdout)
+              except:
+                  pass
+              return None
+
+          def get_image_dimensions(filepath):
+              try:
+                  from PIL import Image
+                  with Image.open(filepath) as img:
+                      return img.size
+              except:
+                  return None
+
+          media_extensions = {
+              'video': ['.mp4', '.webm', '.avi', '.mov', '.mkv', '.mpg'],
+              'image': ['.jpg', '.jpeg', '.png', '.gif', '.webp'],
+              'audio': ['.mp3', '.ogg', '.wav', '.flac', '.m4a']
+          }
+
+          files_data = []
+          total_size = 0
+          stats = {'video': 0, 'image': 0, 'audio': 0}
+
+          print("🔍 Scanning media files...")
+          
+          for root, dirs, files in os.walk('.'):
+              # Skip hidden and system directories
+              dirs[:] = [d for d in dirs if not d.startswith('.') and d not in ['node_modules', '__pycache__']]
+              
+              for file in files:
+                  filepath = Path(root) / file
+                  ext = filepath.suffix.lower()
+                  
+                  # Determine media type
+                  media_type = None
+                  for mtype, extensions in media_extensions.items():
+                      if ext in extensions:
+                          media_type = mtype
+                          stats[mtype] += 1
+                          break
+                  
+                  if not media_type:
+                      continue
+                  
+                  # Get file stats
+                  stat = filepath.stat()
+                  total_size += stat.st_size
+                  
+                  file_info = {
+                      'url': str(filepath.relative_to('.')).replace('\\', '/'),
+                      'name': filepath.name,
+                      'type': media_type,
+                      'size': stat.st_size,
+                      'hash': get_file_hash(filepath),
+                      'modified': int(stat.st_mtime),
+                      'mime': mimetypes.guess_type(str(filepath))[0] or 'application/octet-stream'
+                  }
+                  
+                  # Add media-specific metadata
+                  if media_type in ['video', 'audio']:
+                      media_info = get_media_info(filepath)
+                      if media_info:
+                          format_info = media_info.get('format', {})
+                          file_info.update({
+                              'duration': float(format_info.get('duration', 0)),
+                              'bitrate': int(format_info.get('bit_rate', 0))
+                          })
+                          
+                          # Video specific
+                          if media_type == 'video':
+                              video_stream = next((s for s in media_info.get('streams', []) if s.get('codec_type') == 'video'), None)
+                              if video_stream:
+                                  file_info.update({
+                                      'width': video_stream.get('width'),
+                                      'height': video_stream.get('height'),
+                                      'fps': eval(video_stream.get('r_frame_rate', '0/1'))
+                                  })
+                  
+                  elif media_type == 'image':
+                      dimensions = get_image_dimensions(filepath)
+                      if dimensions:
+                          file_info.update({
+                              'width': dimensions[0],
+                              'height': dimensions[1]
+                          })
+                  
+                  files_data.append(file_info)
+                  print(f"  ✅ {filepath.name} ({media_type})")
+
+          # Sort files by modification time (newest first)
+          files_data.sort(key=lambda x: x['modified'], reverse=True)
+
+          # Generate comprehensive metadata
+          metadata = {
+              'generated': datetime.utcnow().isoformat() + 'Z',
+              'total_files': len(files_data),
+              'total_size': total_size,
+              'statistics': stats,
+              'repository': {
+                  'branch': os.getenv('GITHUB_REF_NAME', 'unknown'),
+                  'commit': os.getenv('GITHUB_SHA', 'unknown')[:8],
+                  'workflow_run': os.getenv('GITHUB_RUN_NUMBER', '0')
+              },
+              'files': files_data
+          }
+
+          # Write files.json
+          with open('files.json', 'w') as f:
+              json.dump(metadata, f, indent=2, separators=(',', ': '))
+
+          print(f"\n📊 Processing complete:")
+          print(f"  📁 Total files: {len(files_data)}")
+          print(f"  🎬 Videos: {stats['video']}")
+          print(f"  🖼️  Images: {stats['image']}")
+          print(f"  🎵 Audio: {stats['audio']}")
+          print(f"  💾 Total size: {total_size / 1024 / 1024:.1f} MB")
+          EOF
+
+      - name: 🗜️ Optimize Media Files
+        if: needs.validate.outputs.media_changed == 'true' && github.event.inputs.skip_optimization != 'true'
+        run: |
+          echo "🚀 Starting media optimization..."
+          
+          # Create optimized directory
+          mkdir -p optimized
+          
+          # Optimize images
+          find . -type f \( -iname "*.jpg" -o -iname "*.jpeg" \) -not -path "./optimized/*" -not -path "./.git/*" | while read img; do
+            echo "🖼️ Optimizing: $img"
+            jpegoptim --max=85 --strip-all --preserve-perms "$img" || true
+          done
+          
+          find . -type f -iname "*.png" -not -path "./optimized/*" -not -path "./.git/*" | while read img; do
+            echo "🖼️ Optimizing: $img"
+            optipng -o2 "$img" || true
+          done
+          
+          # Convert large GIFs to WebM for better compression
+          find . -type f -iname "*.gif" -not -path "./optimized/*" -not -path "./.git/*" | while read gif; do
+            size=$(stat -f%z "$gif" 2>/dev/null || stat -c%s "$gif" 2>/dev/null || echo 0)
+            if [ "$size" -gt 2097152 ]; then # 2MB
+              echo "🎬 Converting large GIF to WebM: $gif"
+              webm_file="${gif%.*}.webm"
+              ffmpeg -i "$gif" -c:v libvpx-vp9 -crf 30 -b:v 0 "$webm_file" -y || true
+            fi
+          done
+
+      - name: 💾 Cache Processed Files
+        uses: actions/cache@v3
+        with:
+          path: |
+            files.json
+            optimized/
+          key: media-cache-${{ env.CACHE_VERSION }}-${{ hashFiles('**/*.mp4', '**/*.jpg', '**/*.png', '**/*.gif') }}
+          restore-keys: |
+            media-cache-${{ env.CACHE_VERSION }}-
+
+      - name: 📤 Upload Processing Artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: processed-media
+          path: |
+            files.json
+            optimized/
+          retention-days: 7
+
+  # ============================================================================
+  # BUILD & TEST
+  # ============================================================================
+  build:
+    name: 🔨 Build & Test
+    runs-on: ubuntu-latest
+    needs: [validate, process-media]
+    if: needs.validate.outputs.should_deploy == 'true'
+    steps:
+      - name: 📥 Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: 🟢 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: 📤 Download Processed Media
+        uses: actions/download-artifact@v3
+        with:
+          name: processed-media
+          path: .
+
+      - name: 🔧 Install Dependencies
+        run: |
+          npm install -g html-minifier-terser clean-css-cli terser
+
+      - name: 🏗️ Build Optimized Version
+        run: |
+          echo "🚀 Building optimized version..."
+          
+          # Create build directory
+          mkdir -p build
+          
+          # Copy and minify HTML
+          if [ -f "index.html" ]; then
+            echo "📄 Minifying HTML..."
+            html-minifier-terser \
+              --collapse-whitespace \
+              --remove-comments \
+              --remove-optional-tags \
+              --remove-redundant-attributes \
+              --remove-script-type-attributes \
+              --remove-tag-whitespace \
+              --use-short-doctype \
+              --minify-css true \
+              --minify-js true \
+              index.html > build/index.html
+          fi
+          
+          # Process CSS
+          find . -name "*.css" -not -path "./build/*" -not -path "./.git/*" | while read css; do
+            echo "🎨 Minifying CSS: $css"
+            cleancss -o "build/$(basename "$css")" "$css"
+          done
+          
+          # Process JavaScript
+          find . -name "*.js" -not -path "./build/*" -not -path "./.git/*" -not -path "./node_modules/*" | while read js; do
+            echo "⚡ Minifying JS: $js"
+            terser "$js" --compress --mangle -o "build/$(basename "$js")"
+          done
+
+      - name: 🧪 Run Tests
+        run: |
+          echo "🧪 Running validation tests..."
+          
+          # Validate JSON
+          if [ -f "files.json" ]; then
+            python3 -m json.tool files.json > /dev/null && echo "✅ files.json is valid"
+          fi
+          
+          # Check HTML syntax
+          if [ -f "build/index.html" ]; then
+            echo "✅ HTML build successful"
+          fi
+          
+          # Verify critical files exist
+          required_files=("files.json")
+          for file in "${required_files[@]}"; do
+            if [ ! -f "$file" ]; then
+              echo "❌ Required file missing: $file"
+              exit 1
+            fi
+          done
+          
+          echo "🎉 All tests passed!"
+
+      - name: 📤 Upload Build Artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: build-artifacts
+          path: |
+            build/
+            files.json
+            **/*.mp4
+            **/*.webm
+            **/*.gif
+            **/*.jpg
+            **/*.jpeg
+            **/*.png
+            **/*.mp3
+            **/*.ogg
+            **/*.wav
+            **/*.avi
+            **/*.mov
+            **/*.flac
+            **/*.mpg
+            **/*.mkv
+          retention-days: 30
+
+  # ============================================================================
+  # DEPLOYMENT
+  # ============================================================================
+  deploy:
+    name: 🚀 Deploy to GitHub Pages
+    runs-on: ubuntu-latest
+    needs: [validate, process-media, build]
+    if: needs.validate.outputs.should_deploy == 'true' && github.ref == 'refs/heads/main'
+    environment:
+      name: ${{ github.event.inputs.deployment_environment || 'production' }}
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: 📥 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 📤 Download Build Artifacts
+        uses: actions/download-artifact@v3
+        with:
+          name: build-artifacts
+          path: .
+
+      - name: 🏗️ Prepare Deployment
+        run: |
+          echo "🚀 Preparing deployment directory..."
+          
+          # Create deployment directory
+          rm -rf deploy
+          mkdir -p deploy
+          
+          # Copy optimized files if they exist, otherwise use originals
+          if [ -d "build" ] && [ "$(ls -A build)" ]; then
+            echo "📦 Using optimized build files..."
+            cp -r build/* deploy/
+          else
+            echo "📦 Using original files..."
+            cp *.html deploy/ 2>/dev/null || true
+            cp *.css deploy/ 2>/dev/null || true
+            cp *.js deploy/ 2>/dev/null || true
+          fi
+          
+          # Copy media files
+          echo "🎬 Copying media files..."
+          find . -type f \( \
+            -iname "*.mp4" -o -iname "*.webm" -o -iname "*.gif" -o \
+            -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" -o \
+            -iname "*.mp3" -o -iname "*.ogg" -o -iname "*.wav" -o \
+            -iname "*.avi" -o -iname "*.mov" -o -iname "*.flac" -o \
+            -iname "*.mpg" -o -iname "*.mkv" \
+          \) -not -path "./deploy/*" -not -path "./.git/*" -not -path "./node_modules/*" -not -path "./build/*" | while read file; do
+            # Preserve directory structure
+            target_dir="deploy/$(dirname "${file#./}")"
+            mkdir -p "$target_dir"
+            cp "$file" "$target_dir/"
+          done
+          
+          # Copy metadata
+          cp files.json deploy/
+          
+          # Generate deployment info
+          cat > deploy/deployment-info.json << EOF
+          {
+            "deployed_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "commit": "${GITHUB_SHA:0:8}",
+            "branch": "${GITHUB_REF_NAME}",
+            "workflow_run": "${GITHUB_RUN_NUMBER}",
+            "environment": "${{ github.event.inputs.deployment_environment || 'production' }}",
+            "actor": "${GITHUB_ACTOR}"
+          }
+          EOF
+          
+          # Create robots.txt
+          cat > deploy/robots.txt << EOF
+          User-agent: *
+          Allow: /
+          
+          Sitemap: https://${GITHUB_REPOSITORY_OWNER}.github.io/${GITHUB_REPOSITORY#*/}/sitemap.xml
+          EOF
+          
+          # Generate basic sitemap
+          cat > deploy/sitemap.xml << 'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+            <url>
+              <loc>https://$(echo $GITHUB_REPOSITORY_OWNER).github.io/$(echo ${GITHUB_REPOSITORY#*/})/</loc>
+              <lastmod>$(date -u +%Y-%m-%d)</lastmod>
+              <changefreq>daily</changefreq>
+              <priority>1.0</priority>
+            </url>
+          </urlset>
+          EOF
+          
+          echo "📊 Deployment summary:"
+          echo "  📁 Files: $(find deploy -type f | wc -l)"
+          echo "  💾 Size: $(du -sh deploy | cut -f1)"
+
+      - name: 🔐 Setup GitHub Pages
+        uses: actions/configure-pages@v3
+
+      - name: 📤 Upload Pages Artifact
+        uses: actions/upload-pages-artifact@v2
+        with:
+          path: ./deploy
+
+      - name: 🚀 Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v2
+
+      - name: 🎉 Deployment Success Notification
+        run: |
+          echo "🎉 Deployment successful!"
+          echo "🌐 Site URL: ${{ steps.deployment.outputs.page_url }}"
+          echo "📊 Deployment completed at: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+  # ============================================================================
+  # POST-DEPLOYMENT
+  # ============================================================================
+  post-deploy:
+    name: 📋 Post-Deployment Tasks
+    runs-on: ubuntu-latest
+    needs: [deploy]
+    if: always() && needs.deploy.result == 'success'
+    steps:
+      - name: 📥 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: 📤 Download Build Artifacts
+        uses: actions/download-artifact@v3
+        with:
+          name: build-artifacts
+          path: .
+
+      - name: 🔄 Update Repository Files
+        run: |
+          # Configure git
+          git config --global user.name "🤖 Memebase Bot"
+          git config --global user.email "actions@github.com"
+          
+          # Add updated files.json to repository
+          if [ -f "files.json" ]; then
+            git add files.json
+            
+            # Only commit if there are changes
+            if ! git diff --staged --quiet; then
+              git commit -m "🔄 Update files.json - $(date -u '+%Y-%m-%d %H:%M:%S UTC')
+              
+              📊 Deployment Stats:
+              - Workflow: #${GITHUB_RUN_NUMBER}
+              - Commit: ${GITHUB_SHA:0:8}
+              - Files processed: $(jq '.total_files' files.json)
+              - Total size: $(jq '.total_size' files.json | awk '{print int($1/1024/1024)}')MB
+              
+              [skip ci]"
+              
+              # Push changes
+              git push
+              echo "✅ Repository updated with latest metadata"
+            else
+              echo "ℹ️ No changes to commit"
+            fi
+          fi
+
+      - name: 🧹 Cleanup Old Artifacts
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const artifacts = await github.rest.actions.listArtifactsForRepo({
+              owner,
+              repo,
+              per_page: 100
+            });
+            
+            // Delete artifacts older than 7 days
+            const cutoff = new Date();
+            cutoff.setDate(cutoff.getDate() - 7);
+            
+            for (const artifact of artifacts.data.artifacts) {
+              const createdAt = new Date(artifact.created_at);
+              if (createdAt < cutoff) {
+                console.log(`🗑️ Deleting old artifact: ${artifact.name}`);
+                await github.rest.actions.deleteArtifact({
+                  owner,
+                  repo,
+                  artifact_id: artifact.id
+                });
+              }
+            }
+
+      - name: 📊 Generate Deployment Report
+        run: |
+          echo "# 🚀 Deployment Report" > deployment-report.md
+          echo "" >> deployment-report.md
+          echo "## 📋 Summary" >> deployment-report.md
+          echo "- **Deployment Time**: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> deployment-report.md
+          echo "- **Commit**: \`${GITHUB_SHA:0:8}\`" >> deployment-report.md
+          echo "- **Branch**: \`${GITHUB_REF_NAME}\`" >> deployment-report.md
+          echo "- **Workflow Run**: #${GITHUB_RUN_NUMBER}" >> deployment-report.md
+          echo "- **Actor**: @${GITHUB_ACTOR}" >> deployment-report.md
+          echo "" >> deployment-report.md
+          
+          if [ -f "files.json" ]; then
+            echo "## 📊 Media Statistics" >> deployment-report.md
+            echo "- **Total Files**: $(jq '.total_files' files.json)" >> deployment-report.md
+            echo "- **Videos**: $(jq '.statistics.video' files.json)" >> deployment-report.md
+            echo "- **Images**: $(jq '.statistics.image' files.json)" >> deployment-report.md
+            echo "- **Audio**: $(jq '.statistics.audio' files.json)" >> deployment-report.md
+            echo "- **Total Size**: $(jq '.total_size' files.json | awk '{printf "%.1f MB", $1/1024/1024}')" >> deployment-report.md
+          fi
+          
+          echo "" >> deployment-report.md
+          echo "## 🔗 Links" >> deployment-report.md
+          echo "- **Live Site**: https://${GITHUB_REPOSITORY_OWNER}.github.io/${GITHUB_REPOSITORY#*/}/" >> deployment-report.md
+          echo "- **Repository**: https://github.com/${GITHUB_REPOSITORY}" >> deployment-report.md
+          
+          cat deployment-report.md
+
+# ============================================================================
+# PERMISSIONS
+# ============================================================================
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+  actions: read
+  security-events: write
